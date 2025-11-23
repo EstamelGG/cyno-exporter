@@ -5,3 +5,4 @@ dist
 build
 .env
 esi.py
+/.idea
