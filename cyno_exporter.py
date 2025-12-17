@@ -1122,9 +1122,24 @@ class ShipTree(QTreeWidget):
                                 print(f"  - {texture_file} -> (未找到哈希)")
                     else:
                         print(f"\n贴图文件: 未找到（依赖中无贴图文件或全部被过滤）")
+                    
+                    # 打印所有未过滤的依赖
+                    all_dependencies = self._get_ship_dependencies(sof_hull_name)
+                    if all_dependencies:
+                        all_dependencies_sorted = sorted(all_dependencies, key=str.lower)
+                        print(f"\n全部依赖文件 (共 {len(all_dependencies_sorted)} 个，未过滤):")
+                        for dep_file in all_dependencies_sorted:
+                            hash_path = self._get_file_hash_path(dep_file)
+                            if hash_path:
+                                print(f"  - {dep_file} -> {hash_path}")
+                            else:
+                                print(f"  - {dep_file} -> (未找到哈希)")
+                    else:
+                        print(f"\n全部依赖文件: 未找到")
                 else:
                     print(f"\n模型文件: sofHullName 为空，无法查找模型")
                     print(f"贴图文件: sofHullName 为空，无法查找贴图")
+                    print(f"全部依赖文件: sofHullName 为空，无法查找依赖")
                 
                 print("-" * 50)
         except:
