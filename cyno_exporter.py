@@ -2010,10 +2010,15 @@ class ShipTree(QTreeWidget):
                 save_folder_action = menu.addAction("Save folder")
                 save_folder_action.triggered.connect(lambda: self._save_folder_command(item))
                 menu.addSeparator()
-                save_folder_and_convert_dds_action = menu.addAction("Save folder | convert dds -> png")
-                save_folder_and_convert_dds_action.triggered.connect(lambda: self._save_folder_command(item, convert_dds=True))
                 save_folder_and_convert_all_action = menu.addAction("Save folder | convert dds -> png, gr2 -> obj")
                 save_folder_and_convert_all_action.triggered.connect(lambda: self._save_folder_command(item, convert_dds=True, convert_gr2=True))
+                # 检查是否是飞船目录（有 graphics_info 属性）
+                if hasattr(item, 'graphics_info') and item.graphics_info:
+                    menu.addSeparator()
+                    export_all_deps_action = menu.addAction("Export all dependencies (unfiltered)")
+                    export_all_deps_action.triggered.connect(lambda: self._export_all_dependencies_command(item, convert_dds=False, convert_gr2=False))
+                    export_all_deps_convert_action = menu.addAction("Export all dependencies | convert dds -> png, gr2 -> obj")
+                    export_all_deps_convert_action.triggered.connect(lambda: self._export_all_dependencies_command(item, convert_dds=True, convert_gr2=True))
             elif isinstance(item, EVEFile):
                 sub_menu = QMenu("Export...", menu)
                 sub_menu.installEventFilter(ContextMenuFilter(sub_menu))
@@ -2289,6 +2294,153 @@ class ShipTree(QTreeWidget):
         
         self.event_logger.add(f"Exported {len(file_destinations)} files to {dest_folder}")
         loading.close()
+    
+    def _export_all_dependencies_command(self, item, convert_dds=False, convert_gr2=False):
+        """导出飞船的所有依赖文件（未过滤）"""
+        # 检查是否是飞船目录
+        if not hasattr(item, 'graphics_info') or not item.graphics_info:
+            self.event_logger.add("Error: This item does not have ship information")
+            return
+        
+        # 获取 sof_hull_name
+        graphics_info = item.graphics_info
+        sof_hull_name = graphics_info.get('sofHullName', '')
+        if not sof_hull_name:
+            self.event_logger.add("Error: Cannot find sofHullName for this ship")
+            return
+        
+        # 获取所有未过滤的依赖
+        all_dependencies = self._get_ship_dependencies(sof_hull_name)
+        if not all_dependencies:
+            self.event_logger.add(f"No dependencies found for ship: {sof_hull_name}")
+            return
+        
+        # 选择目标文件夹
+        dest_folder = QFileDialog.getExistingDirectory(None, "Select Destination")
+        if not dest_folder:
+            return
+        
+        self.event_logger.add(f"Exporting {len(all_dependencies)} dependencies for ship: {item.text(0)} (sofHullName: {sof_hull_name})")
+        
+        # 为每个依赖文件生成唯一的文件名
+        file_destinations = []
+        for dep_path in all_dependencies:
+            # 从依赖路径中提取文件名
+            if dep_path.startswith("res:/"):
+                dep_path = dep_path[5:]  # 去掉 "res:/" 前缀
+            original_filename = os.path.basename(dep_path)
+            
+            # 生成唯一文件名
+            dest_path = self._get_unique_filename(dest_folder, original_filename)
+            file_destinations.append((dep_path, dest_path))
+        
+        if not file_destinations:
+            return
+        
+        # 使用进度条显示下载进度
+        loading = LoadingScreenWindow(file_destinations, stay_on_top=True)
+        
+        # 第一阶段：下载/复制所有文件
+        files_to_process = []  # 收集 (dep_path, dest_path, is_dds, is_gr2)
+        for dep_path, dest_path in file_destinations:
+            original_filename = os.path.basename(dest_path)
+            is_dds = convert_dds and original_filename.lower().endswith(".dds")
+            is_gr2 = convert_gr2 and original_filename.lower().endswith(".gr2")
+            files_to_process.append((dep_path, dest_path, is_dds, is_gr2))
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as worker:
+            futures = []
+            
+            for dep_path, dest_path, is_dds, is_gr2 in files_to_process:
+                # 确保目标目录存在
+                os.makedirs(os.path.dirname(dest_path) if os.path.dirname(dest_path) else dest_folder, exist_ok=True)
+                # 下载文件（不立即转换）
+                futures.append(
+                    worker.submit(self._download_dependency_file, dep_path, dest_path)
+                )
+            
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    loading.label.setText(os.path.basename(result))
+                loading.setValue(loading.value() + 1)
+                QApplication.processEvents()
+        
+        # 第二阶段：统一转换 DDS 和 GR2 文件
+        if convert_dds or convert_gr2:
+            loading.label.setText("Converting files...")
+            loading.setMaximum(len(files_to_process))
+            loading.setValue(0)
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as converter:
+                convert_futures = []
+                for dep_path, dest_path, is_dds, is_gr2 in files_to_process:
+                    if os.path.exists(dest_path):  # 只转换成功下载的文件
+                        if is_dds:
+                            convert_futures.append(converter.submit(self._save_as_png, dest_path))
+                        elif is_gr2:
+                            convert_futures.append(converter.submit(self._save_as_obj, dest_path))
+                
+                for future in concurrent.futures.as_completed(convert_futures):
+                    result = future.result()
+                    loading.setValue(loading.value() + 1)
+                    QApplication.processEvents()
+        
+        self.event_logger.add(f"Exported {len(file_destinations)} dependencies to {dest_folder}")
+        loading.close()
+    
+    def _download_dependency_file(self, dep_path, dest_path):
+        """下载单个依赖文件"""
+        try:
+            # 尝试从本地缓存复制
+            if self.res_tree and self.res_tree.resfiles_list:
+                # 查找对应的 resfile_hash
+                dep_path_normalized = dep_path.lower()
+                if dep_path_normalized.startswith("res:/"):
+                    dep_path_normalized = dep_path_normalized[5:]
+                
+                for resfile in self.res_tree.resfiles_list:
+                    res_path = resfile.get("res_path", "").lower()
+                    if res_path == dep_path_normalized:
+                        resfile_hash = resfile.get("resfile_hash", "")
+                        if resfile_hash:
+                            # 尝试从本地 SharedCache 复制
+                            try:
+                                self.config = json.loads(open(CONFIG_FILE, "r", encoding="utf-8").read())
+                                shared_cache_location = self.config.get("SharedCacheLocation", "")
+                                if shared_cache_location:
+                                    folder, hash_part = resfile_hash.split("/", 1)
+                                    local_file_path = os.path.join(
+                                        shared_cache_location, "ResFiles", folder, hash_part
+                                    )
+                                    if os.path.exists(local_file_path):
+                                        # 验证文件哈希
+                                        if self._verify_file_hash(local_file_path, resfile_hash):
+                                            shutil.copy(local_file_path, dest_path)
+                                            self.event_logger.add(f"{local_file_path} -> {dest_path}")
+                                            return dest_path
+                            except Exception:
+                                pass
+                            
+                            # 如果本地不存在或哈希不匹配，从在线下载
+                            resindex = ResFileIndex(
+                                chinese_client=False, event_logger=self.event_logger
+                            )
+                            try:
+                                url = f"{resindex.resources_url}/{resfile_hash}"
+                                response = requests.get(url, timeout=30)
+                                self.event_logger.add(f"Downloading: {url} | Response: {response.status_code}")
+                                if response.status_code == 200:
+                                    with open(dest_path, "wb") as f:
+                                        f.write(response.content)
+                                    self.event_logger.add(f"{url} -> {dest_path}")
+                                    return dest_path
+                            except Exception as e:
+                                self.event_logger.add(f"Error downloading {dep_path}: {str(e)}")
+            return None
+        except Exception as e:
+            self.event_logger.add(f"Error downloading dependency {dep_path}: {str(e)}")
+            return None
 
 
 class CynoExporterWindow(QMainWindow):
