@@ -66,7 +66,6 @@ class Wavefront:
         with open(f"{gr2_json.replace('.gr2', '')}.obj", "w") as f:
             f.write("\n".join(plaintext))
 
-        os.remove(gr2_json)
         os.remove(f"{gr2_json}.gr2_json")
 
     def o(self, name):

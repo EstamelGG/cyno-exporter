@@ -5,3 +5,5 @@ dist
 build
 .env
 esi.py
+/.idea
+/sde_cache
