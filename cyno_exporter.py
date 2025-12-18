@@ -1320,7 +1320,7 @@ class ShipTree(QTreeWidget):
         if not dependencies:
             return []
         
-        # 过滤出所有 .gr2 文件
+        # 使用统一的过滤函数，所有 .gr2 文件都会被过滤（返回 True）
         model_files = [dep for dep in dependencies if dep.lower().endswith('.gr2')]
         return model_files
     
@@ -1370,68 +1370,17 @@ class ShipTree(QTreeWidget):
         if not dependencies:
             return []
         
-        # 从 iconFolder 推导飞船根目录
-        ship_root_directory = None
-        if icon_folder:
-            if icon_folder.startswith("res:/"):
-                base_path = icon_folder[5:]  # 去掉 "res:/"
-            else:
-                base_path = icon_folder
-            
-            # 去掉末尾的 /icons 或 icons
-            if base_path.endswith("/icons"):
-                ship_root_directory = base_path[:-6]  # 去掉 "/icons"
-            elif base_path.endswith("icons"):
-                ship_root_directory = base_path[:-5]  # 去掉 "icons"
-            
-            # 确保路径格式正确
-            if ship_root_directory:
-                # 确保以 res:/ 开头
-                if not ship_root_directory.startswith("res:/"):
-                    ship_root_directory = f"res:/{ship_root_directory}"
-                # 确保以 / 结尾，以便匹配子目录
-                if not ship_root_directory.endswith("/"):
-                    ship_root_directory += "/"
-        
-        # 从种族名称推导共享目录
-        shared_texture_directory = None
-        if sof_race_name:
-            race_name_lower = sof_race_name.lower()
-            shared_texture_directory = f"res:/dx9/model/shared/{race_name_lower}/textures/"
-        
-        # 过滤出贴图文件（.dds, .png, .jpg）
+        # 使用统一的过滤函数来过滤贴图文件
         texture_files = []
         for dep in dependencies:
             dep_lower = dep.lower()
-            # 检查是否是贴图文件
+            # 只处理贴图文件（.dds, .png, .jpg）
             if dep_lower.endswith('.dds') or dep_lower.endswith('.png') or dep_lower.endswith('.jpg'):
-                # 应用与 Local 标签相同的过滤策略：过滤掉 _lowdetail 和 _mediumdetail
-                file_name = os.path.basename(dep)
-                if "_lowdetail" in file_name or "_mediumdetail" in file_name:
-                    continue
-                
-                # 对于 DDS 文件，应用额外的路径过滤条件
-                if dep_lower.endswith('.dds'):
-                    is_valid = False
-                    
-                    # 条件1：贴图位于飞船根目录及其子目录下
-                    if ship_root_directory:
-                        ship_root_lower = ship_root_directory.lower()
-                        if dep_lower.startswith(ship_root_lower):
-                            is_valid = True
-                    
-                    # 条件2：贴图位于此飞船种族的共享目录
-                    if not is_valid and shared_texture_directory:
-                        shared_dir_lower = shared_texture_directory.lower()
-                        if dep_lower.startswith(shared_dir_lower):
-                            is_valid = True
-                    
-                    # 如果 DDS 文件不符合任一条件，跳过
-                    if not is_valid:
-                        continue
-                
-                # PNG 和 JPG 文件不需要路径过滤，只需要通过 _lowdetail 和 _mediumdetail 过滤
-                texture_files.append(dep)
+                # 确保路径是完整的 res:/ 格式
+                full_dep_path = dep if dep.startswith("res:/") else f"res:/{dep}"
+                # 使用统一的过滤函数
+                if self._is_filtered_file(full_dep_path, icon_folder, sof_race_name):
+                    texture_files.append(dep)
         
         return texture_files
     
@@ -2310,8 +2259,87 @@ class ShipTree(QTreeWidget):
         self.event_logger.add(f"Exported {len(file_destinations)} files to {dest_folder}")
         loading.close()
     
+    def _is_filtered_file(self, dep_path, icon_folder=None, sof_race_name=None):
+        """
+        判断文件是否应该被过滤（即是否应该放在根目录）
+        
+        参数:
+        - dep_path: 依赖文件路径，如 res:/dx9/model/ship/amarr/frigate/af1/af1_t1.gr2
+        - icon_folder: 图标文件夹路径，如 res:/dx9/model/ship/amarr/titan/at1/icons
+        - sof_race_name: 种族名称，如 amarr
+        
+        返回:
+        - bool: True 表示应该被过滤（放在根目录），False 表示未过滤（放在 others 目录）
+        """
+        dep_lower = dep_path.lower()
+        
+        # 模型文件（.gr2）：所有 .gr2 文件都算过滤后的（放在根目录）
+        if dep_lower.endswith('.gr2'):
+            return True
+        
+        # 贴图文件（.dds, .png, .jpg）：应用过滤策略
+        if dep_lower.endswith('.dds') or dep_lower.endswith('.png') or dep_lower.endswith('.jpg'):
+            # 过滤掉包含 _lowdetail 或 _mediumdetail 的文件
+            file_name = os.path.basename(dep_path)
+            if "_lowdetail" in file_name or "_mediumdetail" in file_name:
+                return False  # 未过滤，放在 others 目录
+            
+            # 对于 DDS 文件，应用额外的路径过滤条件
+            if dep_lower.endswith('.dds'):
+                # 从 iconFolder 推导飞船根目录
+                ship_root_directory = None
+                if icon_folder:
+                    if icon_folder.startswith("res:/"):
+                        base_path = icon_folder[5:]  # 去掉 "res:/"
+                    else:
+                        base_path = icon_folder
+                    
+                    # 去掉末尾的 /icons 或 icons
+                    if base_path.endswith("/icons"):
+                        ship_root_directory = base_path[:-6]  # 去掉 "/icons"
+                    elif base_path.endswith("icons"):
+                        ship_root_directory = base_path[:-5]  # 去掉 "icons"
+                    
+                    # 确保路径格式正确
+                    if ship_root_directory:
+                        if not ship_root_directory.startswith("res:/"):
+                            ship_root_directory = f"res:/{ship_root_directory}"
+                        if not ship_root_directory.endswith("/"):
+                            ship_root_directory += "/"
+                
+                # 从种族名称推导共享目录
+                shared_texture_directory = None
+                if sof_race_name:
+                    race_name_lower = sof_race_name.lower()
+                    shared_texture_directory = f"res:/dx9/model/shared/{race_name_lower}/textures/"
+                
+                # 检查 DDS 文件是否满足路径条件
+                is_valid = False
+                
+                # 条件1：贴图位于飞船根目录及其子目录下
+                if ship_root_directory:
+                    ship_root_lower = ship_root_directory.lower()
+                    if dep_lower.startswith(ship_root_lower):
+                        is_valid = True
+                
+                # 条件2：贴图位于此飞船种族的共享目录
+                if not is_valid and shared_texture_directory:
+                    shared_dir_lower = shared_texture_directory.lower()
+                    if dep_lower.startswith(shared_dir_lower):
+                        is_valid = True
+                
+                # 如果 DDS 文件不符合任一条件，放在 others 目录
+                return is_valid
+            
+            # PNG 和 JPG 文件不需要路径过滤，只需要通过 _lowdetail 和 _mediumdetail 过滤
+            # 如果通过了上面的过滤，就放在根目录
+            return True
+        
+        # 其他类型的文件：放在 others 目录
+        return False
+    
     def _export_all_dependencies_command(self, item, convert_dds=False, convert_gr2=False):
-        """导出飞船的所有依赖文件（未过滤）"""
+        """导出飞船的所有依赖文件，应用过滤逻辑：过滤后的文件放在根目录，未过滤的文件放在 others 目录"""
         # 检查是否是飞船目录
         if not hasattr(item, 'graphics_info') or not item.graphics_info:
             self.event_logger.add("Error: This item does not have ship information")
@@ -2324,7 +2352,7 @@ class ShipTree(QTreeWidget):
             self.event_logger.add("Error: Cannot find sofHullName for this ship")
             return
         
-        # 获取所有未过滤的依赖
+        # 获取所有依赖
         all_dependencies = self._get_ship_dependencies(sof_hull_name)
         if not all_dependencies:
             self.event_logger.add(f"No dependencies found for ship: {sof_hull_name}")
@@ -2335,29 +2363,72 @@ class ShipTree(QTreeWidget):
         if not dest_folder:
             return
         
-        self.event_logger.add(f"Exporting {len(all_dependencies)} dependencies for ship: {item.text(0)} (sofHullName: {sof_hull_name})")
+        # 获取图形信息用于过滤判断
+        icon_folder = graphics_info.get('iconFolder', '')
+        sof_race_name = graphics_info.get('sofRaceName', '')
         
-        # 为每个依赖文件生成唯一的文件名
-        file_destinations = []
+        # 分离过滤后的文件和未过滤的文件
+        filtered_files = []  # 放在根目录的文件
+        unfiltered_files = []  # 放在 others 目录的文件
+        
         for dep_path in all_dependencies:
+            # 确保路径是完整的 res:/ 格式用于判断
+            full_dep_path = dep_path if dep_path.startswith("res:/") else f"res:/{dep_path}"
+            is_filtered = self._is_filtered_file(full_dep_path, icon_folder, sof_race_name)
+            
+            if is_filtered:
+                filtered_files.append(dep_path)
+            else:
+                unfiltered_files.append(dep_path)
+        
+        self.event_logger.add(f"Exporting {len(all_dependencies)} dependencies for ship: {item.text(0)} (sofHullName: {sof_hull_name})")
+        self.event_logger.add(f"  - {len(filtered_files)} filtered files (root directory)")
+        self.event_logger.add(f"  - {len(unfiltered_files)} unfiltered files (others directory)")
+        
+        # 创建 others 目录
+        others_folder = os.path.join(dest_folder, "others")
+        os.makedirs(others_folder, exist_ok=True)
+        
+        # 为过滤后的文件生成目标路径（根目录）
+        filtered_destinations = []
+        for dep_path in filtered_files:
             # 从依赖路径中提取文件名
             if dep_path.startswith("res:/"):
-                dep_path = dep_path[5:]  # 去掉 "res:/" 前缀
-            original_filename = os.path.basename(dep_path)
+                dep_path_clean = dep_path[5:]  # 去掉 "res:/" 前缀
+            else:
+                dep_path_clean = dep_path
+            original_filename = os.path.basename(dep_path_clean)
             
-            # 生成唯一文件名
+            # 生成唯一文件名（根目录）
             dest_path = self._get_unique_filename(dest_folder, original_filename)
-            file_destinations.append((dep_path, dest_path))
+            filtered_destinations.append((dep_path, dest_path))
         
-        if not file_destinations:
+        # 为未过滤的文件生成目标路径（others 目录）
+        unfiltered_destinations = []
+        for dep_path in unfiltered_files:
+            # 从依赖路径中提取文件名
+            if dep_path.startswith("res:/"):
+                dep_path_clean = dep_path[5:]  # 去掉 "res:/" 前缀
+            else:
+                dep_path_clean = dep_path
+            original_filename = os.path.basename(dep_path_clean)
+            
+            # 生成唯一文件名（others 目录）
+            dest_path = self._get_unique_filename(others_folder, original_filename)
+            unfiltered_destinations.append((dep_path, dest_path))
+        
+        # 合并所有文件目标
+        all_destinations = filtered_destinations + unfiltered_destinations
+        
+        if not all_destinations:
             return
         
         # 使用进度条显示下载进度
-        loading = LoadingScreenWindow(file_destinations, stay_on_top=True)
+        loading = LoadingScreenWindow(all_destinations, stay_on_top=True)
         
         # 第一阶段：下载/复制所有文件
         files_to_process = []  # 收集 (dep_path, dest_path, is_dds, is_gr2)
-        for dep_path, dest_path in file_destinations:
+        for dep_path, dest_path in all_destinations:
             original_filename = os.path.basename(dest_path)
             is_dds = convert_dds and original_filename.lower().endswith(".dds")
             is_gr2 = convert_gr2 and original_filename.lower().endswith(".gr2")
@@ -2401,7 +2472,7 @@ class ShipTree(QTreeWidget):
                     loading.setValue(loading.value() + 1)
                     QApplication.processEvents()
         
-        self.event_logger.add(f"Exported {len(file_destinations)} dependencies to {dest_folder}")
+        self.event_logger.add(f"Exported {len(all_destinations)} dependencies to {dest_folder} ({len(filtered_destinations)} in root, {len(unfiltered_destinations)} in others)")
         loading.close()
     
     def _download_dependency_file(self, dep_path, dest_path):
