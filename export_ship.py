@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+import os
+import sys
+import json
+import yaml
+import re
+import subprocess
+import requests
+import argparse
+from pathlib import Path
+
+
+def get_latest_build():
+    """获取最新的build number"""
+    url = "https://developers.eveonline.com/static-data/tranquility/latest.jsonl"
+    response = requests.get(url, timeout=10)
+    for line in response.text.strip().splitlines():
+        data = json.loads(line)
+        if data.get("_key") == "latest":
+            return data.get("build", None)
+    return None
+
+
+def get_build_number_from_resindex():
+    """从resindex获取build number"""
+    url = "https://binaries.eveonline.com/eveonline_latest.txt"
+    response = requests.get(url, timeout=10)
+    for line in response.text.strip().splitlines():
+        if line.startswith("resfileindex.txt"):
+            parts = line.lower().split(",")
+            if len(parts) > 1:
+                return parts[1].split("_")[0] if "_" in parts[1] else None
+    return None
+
+
+def download_resfileindex(build):
+    """下载resfileindex.txt"""
+    url = f"https://binaries.eveonline.com/eveonline_{build}.txt"
+    response = requests.get(url, timeout=30)
+    resfileindex_hash = None
+    for line in response.text.strip().splitlines():
+        if line.lower().startswith("resfileindex.txt"):
+            parts = line.lower().split(",")
+            if len(parts) > 1:
+                resfileindex_hash = parts[1]
+                break
+    
+    if not resfileindex_hash:
+        return None
+    
+    download_url = f"https://binaries.eveonline.com/{resfileindex_hash}"
+    resfileindex_response = requests.get(download_url, timeout=30)
+    
+    resfiles = {}
+    for line in resfileindex_response.text.strip().splitlines():
+        if not line:
+            continue
+        parts = line.lower().split(",")
+        if len(parts) >= 2:
+            res_path = parts[0].split(":/")[1] if ":/" in parts[0] else parts[0]
+            resfile_hash = parts[1]
+            resfiles[res_path] = resfile_hash
+    
+    return resfiles
+
+
+def download_resfiledependencies(build):
+    """下载resfiledependencies.yaml"""
+    url = f"https://binaries.eveonline.com/eveonline_{build}.txt"
+    response = requests.get(url, timeout=30)
+    dependencies_hash = None
+    for line in response.text.strip().splitlines():
+        if line.lower().startswith("resfiledependencies.yaml"):
+            parts = line.lower().split(",")
+            if len(parts) > 1:
+                dependencies_hash = parts[1]
+                break
+    
+    if not dependencies_hash:
+        return {}
+    
+    download_url = f"https://binaries.eveonline.com/{dependencies_hash}"
+    dependencies_response = requests.get(download_url, timeout=30)
+    return yaml.safe_load(dependencies_response.text) or {}
+
+
+def get_ship_info_from_sde(type_id):
+    """从SDE获取飞船信息"""
+    latest_url = "https://developers.eveonline.com/static-data/tranquility/latest.jsonl"
+    response = requests.get(latest_url, timeout=10)
+    build = None
+    for line in response.text.strip().splitlines():
+        data = json.loads(line)
+        if data.get("_key") == "latest":
+            build = data.get("build")
+            break
+    
+    if not build:
+        return None
+    
+    sde_base = f"https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-{build}-jsonl.zip"
+    
+    # 下载并解压SDE（简化版，实际应该缓存）
+    import tempfile
+    import zipfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = os.path.join(tmpdir, "sde.zip")
+        zip_response = requests.get(sde_base, timeout=60, stream=True)
+        with open(zip_path, "wb") as f:
+            for chunk in zip_response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(tmpdir)
+        
+        # 读取graphics.jsonl
+        graphics_info = {}
+        graphics_path = os.path.join(tmpdir, f"eve-online-static-data-{build}-jsonl", "graphics.jsonl")
+        with open(graphics_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                graphic_id = data.get("_key")
+                if graphic_id:
+                    graphics_info[int(graphic_id)] = {
+                        "iconFolder": data.get("iconFolder", ""),
+                        "sofHullName": data.get("sofHullName", ""),
+                        "sofRaceName": data.get("sofRaceName", ""),
+                    }
+        
+        # 读取types.jsonl
+        types_path = os.path.join(tmpdir, f"eve-online-static-data-{build}-jsonl", "types.jsonl")
+        with open(types_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                if str(data.get("_key")) == str(type_id):
+                    graphic_id = data.get("graphicID")
+                    if graphic_id and int(graphic_id) in graphics_info:
+                        return graphics_info[int(graphic_id)]
+    
+    return None
+
+
+def is_filtered_file(dep_path, icon_folder=None, sof_race_name=None):
+    """判断文件是否应该被过滤"""
+    dep_lower = dep_path.lower()
+    
+    # 所有.gr2文件都保留
+    if dep_lower.endswith(".gr2"):
+        return True
+    
+    # 贴图文件过滤
+    if dep_lower.endswith(".dds") or dep_lower.endswith(".png") or dep_lower.endswith(".jpg"):
+        # 过滤掉低质量贴图
+        file_name = os.path.basename(dep_path)
+        if "_lowdetail" in file_name or "_mediumdetail" in file_name:
+            return False
+        
+        # DDS文件需要路径过滤
+        if dep_lower.endswith(".dds"):
+            ship_root_directory = None
+            if icon_folder:
+                base_path = icon_folder[5:] if icon_folder.startswith("res:/") else icon_folder
+                if base_path.endswith("/icons"):
+                    ship_root_directory = base_path[:-6]
+                elif base_path.endswith("icons"):
+                    ship_root_directory = base_path[:-5]
+                
+                if ship_root_directory:
+                    if not ship_root_directory.startswith("res:/"):
+                        ship_root_directory = f"res:/{ship_root_directory}"
+                    if not ship_root_directory.endswith("/"):
+                        ship_root_directory += "/"
+            
+            shared_texture_directory = None
+            if sof_race_name:
+                race_name_lower = sof_race_name.lower()
+                shared_texture_directory = f"res:/dx9/model/shared/{race_name_lower}/textures/"
+            
+            is_valid = False
+            if ship_root_directory and dep_lower.startswith(ship_root_directory.lower()):
+                is_valid = True
+            if not is_valid and shared_texture_directory and dep_lower.startswith(shared_texture_directory.lower()):
+                is_valid = True
+            
+            return is_valid
+        
+        return True
+    
+    return False
+
+
+def get_ship_dependencies(sof_hull_name, resfile_dependencies):
+    """获取飞船的所有依赖"""
+    if not sof_hull_name or not resfile_dependencies:
+        return []
+    
+    key = f"res:/dx9/model/spaceobjectfactory/hulls/{sof_hull_name}.red"
+    dependencies = resfile_dependencies.get(key, [])
+    return dependencies if isinstance(dependencies, list) else []
+
+
+def download_file(res_path, resfiles, output_path):
+    """从在线下载文件"""
+    res_path_normalized = res_path.lower()
+    if res_path_normalized.startswith("res:/"):
+        res_path_normalized = res_path_normalized[5:]
+    
+    resfile_hash = resfiles.get(res_path_normalized)
+    if not resfile_hash:
+        return False
+    
+    url = f"https://resources.eveonline.com/{resfile_hash}"
+    response = requests.get(url, timeout=30)
+    if response.status_code == 200:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "wb") as f:
+            f.write(response.content)
+        return True
+    return False
+
+
+def convert_gr2_to_obj(gr2_path):
+    """将GR2转换为OBJ"""
+    gr2_json_path = f"{gr2_path}.gr2_json"
+    
+    gr2tojson_exe = os.path.join("tools", "gr2tojson", "gr2tojson.exe")
+    subprocess.run([gr2tojson_exe, gr2_path], check=False, capture_output=True)
+    
+    if not os.path.exists(gr2_json_path):
+        return False
+    
+    with open(gr2_json_path, "r", encoding="utf-8") as f:
+        content = re.sub(r"\-nan\(ind\)|\-inf|inf", "0", f.read())
+        gr2_json = json.loads(content)
+    
+    obj_lines = []
+    model_offset = 1
+    
+    for mesh in gr2_json.get("meshes", []):
+        obj_lines.append(f"o {mesh['name']}")
+        
+        vertex = mesh.get("vertex", {})
+        positions = vertex.get("position", [])
+        texcoords = vertex.get("texcoord0", [])
+        normals = vertex.get("normal", [])
+        
+        for i in range(0, len(positions), 3):
+            obj_lines.append(f"v {positions[i]} {positions[i+1]} {positions[i+2]}")
+        
+        for i in range(0, len(texcoords), 2):
+            obj_lines.append(f"vt {texcoords[i]} {texcoords[i+1]}")
+        
+        if normals:
+            for i in range(0, len(normals), 3):
+                obj_lines.append(f"vn {normals[i]} {normals[i+1]} {normals[i+2]}")
+        
+        obj_lines.append("s 1")
+        
+        for indice in mesh.get("indices", []):
+            obj_lines.append(f"usemtl {indice['name']}")
+            faces = indice.get("faces", [])
+            for i in range(0, len(faces), 3):
+                v1 = faces[i] + model_offset
+                v2 = faces[i + 1] + model_offset
+                v3 = faces[i + 2] + model_offset
+                obj_lines.append(f"f {v1}/{v1}/{v1} {v2}/{v2}/{v2} {v3}/{v3}/{v3}")
+        
+        model_offset += len(positions) // 3
+    
+    obj_path = gr2_path.replace(".gr2", ".obj")
+    with open(obj_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(obj_lines))
+    
+    os.remove(gr2_json_path)
+    return True
+
+
+def convert_dds_to_png(dds_path):
+    """将DDS转换为PNG"""
+    nvtt_exe = os.path.join("tools", "dds2png", "nvtt_export.exe")
+    dir_path = os.path.dirname(dds_path)
+    filename = os.path.splitext(os.path.basename(dds_path))[0]
+    png_path = os.path.join(dir_path, f"{filename}.png")
+    
+    subprocess.run([nvtt_exe, dds_path, "-o", png_path], check=False, capture_output=True)
+    
+    if os.path.exists(png_path):
+        os.remove(dds_path)
+        return True
+    return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="导出飞船资源")
+    parser.add_argument("type_id", type=int, help="飞船TypeID")
+    args = parser.parse_args()
+    
+    print(f"正在获取飞船信息 (TypeID: {args.type_id})...")
+    ship_info = get_ship_info_from_sde(args.type_id)
+    if not ship_info:
+        print(f"错误: 无法找到TypeID {args.type_id}的飞船信息")
+        sys.exit(1)
+    
+    sof_hull_name = ship_info.get("sofHullName", "")
+    if not sof_hull_name:
+        print(f"错误: 飞船没有sofHullName")
+        sys.exit(1)
+    
+    print(f"飞船信息: sofHullName={sof_hull_name}")
+    
+    # 获取build number
+    print("正在获取build number...")
+    build = get_build_number_from_resindex()
+    if not build:
+        build = get_latest_build()
+    if not build:
+        print("错误: 无法获取build number")
+        sys.exit(1)
+    
+    print(f"Build number: {build}")
+    
+    # 下载resfileindex和resfiledependencies
+    print("正在下载resfileindex.txt...")
+    resfiles = download_resfileindex(build)
+    if not resfiles:
+        print("错误: 无法下载resfileindex.txt")
+        sys.exit(1)
+    
+    print("正在下载resfiledependencies.yaml...")
+    resfile_dependencies = download_resfiledependencies(build)
+    if not resfile_dependencies:
+        print("错误: 无法下载resfiledependencies.yaml")
+        sys.exit(1)
+    
+    # 获取所有依赖
+    print("正在获取依赖列表...")
+    all_dependencies = get_ship_dependencies(sof_hull_name, resfile_dependencies)
+    if not all_dependencies:
+        print(f"错误: 无法找到飞船 {sof_hull_name} 的依赖")
+        sys.exit(1)
+    
+    print(f"找到 {len(all_dependencies)} 个依赖文件")
+    
+    # 过滤依赖
+    icon_folder = ship_info.get("iconFolder", "")
+    sof_race_name = ship_info.get("sofRaceName", "")
+    filtered_dependencies = []
+    
+    for dep_path in all_dependencies:
+        full_dep_path = dep_path if dep_path.startswith("res:/") else f"res:/{dep_path}"
+        if is_filtered_file(full_dep_path, icon_folder, sof_race_name):
+            filtered_dependencies.append(dep_path)
+    
+    print(f"过滤后剩余 {len(filtered_dependencies)} 个文件")
+    
+    # 创建输出目录
+    output_dir = "output"
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 下载并转换文件
+    print("正在下载和转换文件...")
+    for i, dep_path in enumerate(filtered_dependencies, 1):
+        print(f"[{i}/{len(filtered_dependencies)}] 处理: {dep_path}")
+        
+        filename = os.path.basename(dep_path)
+        output_path = os.path.join(output_dir, filename)
+        
+        if download_file(dep_path, resfiles, output_path):
+            if output_path.lower().endswith(".gr2"):
+                print(f"  转换GR2 -> OBJ...")
+                if convert_gr2_to_obj(output_path):
+                    print(f"  ✓ 已转换为OBJ")
+            elif output_path.lower().endswith(".dds"):
+                print(f"  转换DDS -> PNG...")
+                if convert_dds_to_png(output_path):
+                    print(f"  ✓ 已转换为PNG")
+        else:
+            print(f"  ✗ 下载失败")
+    
+    print(f"\n完成! 文件已保存到 {output_dir} 目录")
+
+
+if __name__ == "__main__":
+    main()

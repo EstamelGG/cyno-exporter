@@ -1,0 +1,38 @@
+name: Export Ship Resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      type_id:
+        description: '飞船TypeID'
+        required: true
+        type: string
+
+jobs:
+  export:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests pyyaml
+    
+    - name: Run export script
+      run: |
+        python export_ship.py ${{ inputs.type_id }}
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ship-resources-${{ inputs.type_id }}
+        path: output/
+        retention-days: 30
