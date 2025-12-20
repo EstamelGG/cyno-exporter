@@ -174,36 +174,6 @@ def is_filtered_file(dep_path, icon_folder=None, sof_race_name=None):
         file_name = os.path.basename(dep_path)
         if "_lowdetail" in file_name or "_mediumdetail" in file_name:
             return False
-        
-        # DDS files need path filtering
-        if dep_lower.endswith(".dds"):
-            ship_root_directory = None
-            if icon_folder:
-                base_path = icon_folder[5:] if icon_folder.startswith("res:/") else icon_folder
-                if base_path.endswith("/icons"):
-                    ship_root_directory = base_path[:-6]
-                elif base_path.endswith("icons"):
-                    ship_root_directory = base_path[:-5]
-                
-                if ship_root_directory:
-                    if not ship_root_directory.startswith("res:/"):
-                        ship_root_directory = f"res:/{ship_root_directory}"
-                    if not ship_root_directory.endswith("/"):
-                        ship_root_directory += "/"
-            
-            shared_texture_directory = None
-            if sof_race_name:
-                race_name_lower = sof_race_name.lower()
-                shared_texture_directory = f"res:/dx9/model/shared/{race_name_lower}/textures/"
-            
-            is_valid = False
-            if ship_root_directory and dep_lower.startswith(ship_root_directory.lower()):
-                is_valid = True
-            if not is_valid and shared_texture_directory and dep_lower.startswith(shared_texture_directory.lower()):
-                is_valid = True
-            
-            return is_valid
-        
         return True
     
     return False
@@ -370,9 +340,6 @@ def main():
         full_dep_path = dep_path if dep_path.startswith("res:/") else f"res:/{dep_path}"
         if is_filtered_file(full_dep_path, icon_folder, sof_race_name):
             filtered_dependencies.append(dep_path)
-            print(f"Add {full_dep_path}")
-        else:
-            print(f"Pass {full_dep_path}")
     
     print(f"After filtering: {len(filtered_dependencies)} files remaining")
     
