@@ -389,13 +389,13 @@ def main():
             if output_path.lower().endswith(".gr2"):
                 print(f"  Converting GR2 -> OBJ...")
                 if convert_gr2_to_obj(output_path):
-                    print(f"  ✓ Converted to OBJ")
+                    print(f"  [+] Converted to OBJ")
             elif output_path.lower().endswith(".dds"):
                 print(f"  Converting DDS -> PNG...")
                 if convert_dds_to_png(output_path):
-                    print(f"  ✓ Converted to PNG")
+                    print(f"  [+] Converted to PNG")
         else:
-            print(f"  ✗ Download failed")
+            print(f"  [!] Download failed")
     
     print(f"\nComplete! Files saved to {output_dir} directory")
 
