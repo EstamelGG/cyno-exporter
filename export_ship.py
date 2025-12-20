@@ -102,7 +102,7 @@ def get_ship_info_from_sde(type_id):
     sde_cache_dir = "sde_cache"
     os.makedirs(sde_cache_dir, exist_ok=True)
     
-    extracted_dir = os.path.join(sde_cache_dir, f"eve-online-static-data-{build}-jsonl")
+    extracted_dir = sde_cache_dir
     
     # Check if already extracted
     if not os.path.exists(extracted_dir):
