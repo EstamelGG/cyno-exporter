@@ -370,6 +370,9 @@ def main():
         full_dep_path = dep_path if dep_path.startswith("res:/") else f"res:/{dep_path}"
         if is_filtered_file(full_dep_path, icon_folder, sof_race_name):
             filtered_dependencies.append(dep_path)
+            print(f"Add {full_dep_path}")
+        else:
+            print(f"Pass {full_dep_path}")
     
     print(f"After filtering: {len(filtered_dependencies)} files remaining")
     

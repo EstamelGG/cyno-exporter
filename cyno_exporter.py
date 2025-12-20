@@ -1381,7 +1381,7 @@ class ShipTree(QTreeWidget):
                 # 使用统一的过滤函数
                 if self._is_filtered_file(full_dep_path, icon_folder, sof_race_name):
                     texture_files.append(dep)
-        
+
         return texture_files
     
     def set_icon_from_extension(self, ext):
