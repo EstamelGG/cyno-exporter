@@ -16,8 +16,8 @@ def get_latest_build():
     response = requests.get(url, timeout=10)
     for line in response.text.strip().splitlines():
         data = json.loads(line)
-        if data.get("_key") == "latest":
-            return data.get("build", None)
+        if data.get("_key") == "sde":
+            return data.get("buildNumber", None)
     return None
 
 
@@ -39,7 +39,7 @@ def download_resfileindex(build):
     response = requests.get(url, timeout=30)
     resfileindex_hash = None
     for line in response.text.strip().splitlines():
-        if line.lower().startswith("resfileindex.txt"):
+        if line.lower().startswith("app:/resfileindex.txt"):
             parts = line.lower().split(",")
             if len(parts) > 1:
                 resfileindex_hash = parts[1]
@@ -70,7 +70,7 @@ def download_resfiledependencies(build):
     response = requests.get(url, timeout=30)
     dependencies_hash = None
     for line in response.text.strip().splitlines():
-        if line.lower().startswith("resfiledependencies.yaml"):
+        if line.lower().startswith("app:/resfiledependencies.yaml"):
             parts = line.lower().split(",")
             if len(parts) > 1:
                 dependencies_hash = parts[1]
@@ -98,48 +98,55 @@ def get_ship_info_from_sde(type_id):
     if not build:
         return None
     
-    sde_base = f"https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-{build}-jsonl.zip"
+    # Use fixed sde_cache directory
+    sde_cache_dir = "sde_cache"
+    os.makedirs(sde_cache_dir, exist_ok=True)
     
-    # Download and extract SDE (simplified version, should be cached in production)
-    import tempfile
-    import zipfile
-    with tempfile.TemporaryDirectory() as tmpdir:
-        zip_path = os.path.join(tmpdir, "sde.zip")
+    extracted_dir = os.path.join(sde_cache_dir, f"eve-online-static-data-{build}-jsonl")
+    
+    # Check if already extracted
+    if not os.path.exists(extracted_dir):
+        sde_base = f"https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-{build}-jsonl.zip"
+        zip_path = os.path.join(sde_cache_dir, f"sde-{build}.zip")
+        
+        # Download SDE zip
         zip_response = requests.get(sde_base, timeout=60, stream=True)
         with open(zip_path, "wb") as f:
             for chunk in zip_response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
+        # Extract SDE
+        import zipfile
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(tmpdir)
-        
-        # Read graphics.jsonl
-        graphics_info = {}
-        graphics_path = os.path.join(tmpdir, f"eve-online-static-data-{build}-jsonl", "graphics.jsonl")
-        with open(graphics_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                data = json.loads(line)
-                graphic_id = data.get("_key")
-                if graphic_id:
-                    graphics_info[int(graphic_id)] = {
-                        "iconFolder": data.get("iconFolder", ""),
-                        "sofHullName": data.get("sofHullName", ""),
-                        "sofRaceName": data.get("sofRaceName", ""),
-                    }
-        
-        # Read types.jsonl
-        types_path = os.path.join(tmpdir, f"eve-online-static-data-{build}-jsonl", "types.jsonl")
-        with open(types_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                data = json.loads(line)
-                if str(data.get("_key")) == str(type_id):
-                    graphic_id = data.get("graphicID")
-                    if graphic_id and int(graphic_id) in graphics_info:
-                        return graphics_info[int(graphic_id)]
+            zip_ref.extractall(sde_cache_dir)
+    
+    # Read graphics.jsonl
+    graphics_info = {}
+    graphics_path = os.path.join(extracted_dir, "graphics.jsonl")
+    with open(graphics_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            graphic_id = data.get("_key")
+            if graphic_id:
+                graphics_info[int(graphic_id)] = {
+                    "iconFolder": data.get("iconFolder", ""),
+                    "sofHullName": data.get("sofHullName", ""),
+                    "sofRaceName": data.get("sofRaceName", ""),
+                }
+    
+    # Read types.jsonl
+    types_path = os.path.join(extracted_dir, "types.jsonl")
+    with open(types_path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            data = json.loads(line)
+            if str(data.get("_key")) == str(type_id):
+                graphic_id = data.get("graphicID")
+                if graphic_id and int(graphic_id) in graphics_info:
+                    return graphics_info[int(graphic_id)]
     
     return None
 
