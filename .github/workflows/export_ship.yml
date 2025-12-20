@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       type_id:
-        description: '飞船TypeID'
+        description: 'Ship TypeID'
         required: true
         type: string
 
