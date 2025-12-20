@@ -102,27 +102,63 @@ def get_ship_info_from_sde(type_id):
     sde_cache_dir = "sde_cache"
     os.makedirs(sde_cache_dir, exist_ok=True)
     
-    extracted_dir = sde_cache_dir
-    
     # Check if already extracted
-    if not os.path.exists(extracted_dir):
+    extracted_dir = None
+    expected_dir = os.path.join(sde_cache_dir, f"eve-online-static-data-{build}-jsonl")
+    
+    if os.path.exists(expected_dir):
+        extracted_dir = expected_dir
+    else:
         sde_base = f"https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-{build}-jsonl.zip"
         zip_path = os.path.join(sde_cache_dir, f"sde-{build}.zip")
         
-        # Download SDE zip
+        print(f"Downloading SDE zip to {zip_path}...")
         zip_response = requests.get(sde_base, timeout=60, stream=True)
         with open(zip_path, "wb") as f:
             for chunk in zip_response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        # Extract SDE
+        print(f"Extracting SDE zip...")
         import zipfile
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(sde_cache_dir)
+        
+        # List contents of sde_cache_dir after extraction
+        print(f"\nContents of {sde_cache_dir}:")
+        for item in os.listdir(sde_cache_dir):
+            item_path = os.path.join(sde_cache_dir, item)
+            if os.path.isdir(item_path):
+                print(f"  [DIR]  {item}")
+            else:
+                print(f"  [FILE] {item}")
+        
+        # Find the extracted directory
+        for item in os.listdir(sde_cache_dir):
+            item_path = os.path.join(sde_cache_dir, item)
+            if os.path.isdir(item_path) and "eve-online-static-data" in item:
+                extracted_dir = item_path
+                print(f"\nFound extracted directory: {extracted_dir}")
+                print(f"Contents of {extracted_dir}:")
+                for subitem in os.listdir(extracted_dir)[:20]:  # List first 20 items
+                    subitem_path = os.path.join(extracted_dir, subitem)
+                    if os.path.isdir(subitem_path):
+                        print(f"  [DIR]  {subitem}")
+                    else:
+                        print(f"  [FILE] {subitem}")
+                break
+    
+    if not extracted_dir:
+        print(f"Error: Could not find extracted SDE directory in {sde_cache_dir}")
+        return None
     
     # Read graphics.jsonl
     graphics_info = {}
     graphics_path = os.path.join(extracted_dir, "graphics.jsonl")
+    print(f"\nLooking for graphics.jsonl at: {graphics_path}")
+    if not os.path.exists(graphics_path):
+        print(f"Error: graphics.jsonl not found at {graphics_path}")
+        return None
+    
     with open(graphics_path, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -138,6 +174,11 @@ def get_ship_info_from_sde(type_id):
     
     # Read types.jsonl
     types_path = os.path.join(extracted_dir, "types.jsonl")
+    print(f"Looking for types.jsonl at: {types_path}")
+    if not os.path.exists(types_path):
+        print(f"Error: types.jsonl not found at {types_path}")
+        return None
+    
     with open(types_path, "r", encoding="utf-8") as f:
         for line in f:
             if not line.strip():
