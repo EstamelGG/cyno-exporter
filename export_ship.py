@@ -91,8 +91,8 @@ def get_ship_info_from_sde(type_id):
     build = None
     for line in response.text.strip().splitlines():
         data = json.loads(line)
-        if data.get("_key") == "latest":
-            build = data.get("build")
+        if data.get("_key") == "sde":
+            build = data.get("buildNumber")
             break
     
     if not build:
