@@ -1427,6 +1427,66 @@ class ShipTree(QTreeWidget):
 
         return texture_files
     
+    def _find_faction_directory_files(self, ship_root_directory, sof_faction_name, sof_hull_name=None, icon_folder=None, sof_race_name=None):
+        """
+        在飞船根目录下查找与 sofFactionName 同名的目录，并返回该目录下的所有文件（应用过滤）
+        
+        参数:
+        - ship_root_directory: 飞船根目录，如 res:/dx9/model/ship/amarr/frigate/af1/
+        - sof_faction_name: 派系名称，如 amarr
+        - sof_hull_name: 船体名称，如 af1_t1，用于按文件名过滤
+        - icon_folder: 图标文件夹路径，用于过滤判断
+        - sof_race_name: 种族名称，用于过滤判断
+        
+        返回:
+        - list: 文件路径列表（已过滤），如果未找到目录或文件则返回空列表
+        """
+        if not ship_root_directory or not sof_faction_name:
+            return []
+        
+        if not self.res_tree or not self.res_tree.resfiles_list:
+            return []
+        
+        # 从根目录提取路径（去掉 res:/ 前缀）
+        if ship_root_directory.startswith("res:/"):
+            base_path = ship_root_directory[5:]  # 去掉 "res:/"
+        else:
+            base_path = ship_root_directory
+        
+        # 确保路径以 / 结尾
+        if not base_path.endswith("/"):
+            base_path += "/"
+        
+        # 构建 faction 目录路径
+        faction_dir_path = f"{base_path}{sof_faction_name.lower()}/"
+        faction_dir_path_lower = faction_dir_path.lower()
+        
+        # 准备 sofHullName 过滤（如果提供）
+        sof_hull_name_lower = sof_hull_name.lower() if sof_hull_name else None
+        
+        # 在资源文件列表中查找该目录下的所有文件，并应用过滤
+        faction_files = []
+        for resfile in self.res_tree.resfiles_list:
+            res_path = resfile.get("res_path", "").lower()
+            
+            # 检查路径是否在 faction 目录下
+            if res_path.startswith(faction_dir_path_lower):
+                # 构建完整的 res:/ 路径
+                full_path = f"res:/{resfile.get('res_path', '')}"
+                
+                # 首先按 sofHullName 过滤（如果提供）
+                if sof_hull_name_lower:
+                    file_name = os.path.basename(full_path).lower()
+                    # 检查文件名中是否包含 sofHullName
+                    if sof_hull_name_lower not in file_name:
+                        continue  # 跳过不包含 sofHullName 的文件
+                
+                # 应用过滤逻辑（与贴图文件使用相同的过滤规则）
+                if self._is_filtered_file(full_path, icon_folder, sof_race_name):
+                    faction_files.append(full_path)
+        
+        return faction_files
+    
     def set_icon_from_extension(self, ext):
         """根据文件扩展名设置图标"""
         if ext == ".png":
@@ -1443,6 +1503,49 @@ class ShipTree(QTreeWidget):
             return QIcon(self.icon_atlas.copy(65, 0, 15, 16))
         else:
             return QIcon(self.icon_atlas.copy(161, 0, 15, 16))
+    
+    def _add_faction_directory_to_ship(self, ship_dir, ship_root_directory, sof_faction_name, sof_hull_name=None, icon_folder=None, sof_race_name=None):
+        """
+        为飞船目录添加 faction 目录及其文件（应用过滤）
+        
+        参数:
+        - ship_dir: 飞船目录节点
+        - ship_root_directory: 飞船根目录，如 res:/dx9/model/ship/amarr/frigate/af1/
+        - sof_faction_name: 派系名称，如 amarr
+        - sof_hull_name: 船体名称，如 af1_t1，用于按文件名过滤
+        - icon_folder: 图标文件夹路径，用于过滤判断
+        - sof_race_name: 种族名称，用于过滤判断
+        """
+        if not ship_root_directory or not sof_faction_name:
+            return
+        
+        # 查找 faction 目录下的文件（应用过滤，包括按 sofHullName 过滤）
+        faction_files = self._find_faction_directory_files(ship_root_directory, sof_faction_name, sof_hull_name, icon_folder, sof_race_name)
+        
+        if not faction_files:
+            return
+        
+        # 创建 faction 目录节点
+        faction_dir = EVEDirectory(
+            ship_dir,
+            text=sof_faction_name,
+            icon=QIcon(self.icon_atlas.copy(16, 0, 15, 16))
+        )
+        ship_dir.add(faction_dir)
+        
+        # 添加 faction 目录下的所有文件
+        for faction_file in sorted(faction_files, key=str.lower):
+            file_ext = os.path.splitext(faction_file)[1]
+            faction_item = EVEFile(
+                faction_dir,
+                text=os.path.basename(faction_file),
+                filename=os.path.basename(faction_file),
+                respath=faction_file,
+                resfile_hash="",
+                size=0,
+                icon=self.set_icon_from_extension(file_ext),
+            )
+            faction_dir.add(faction_item)
     
     def _format_filesize(self, size):
         """格式化文件大小"""
@@ -1730,9 +1833,15 @@ class ShipTree(QTreeWidget):
                     # 获取贴图文件
                     icon_folder = graphics_info_item.get('iconFolder', '')
                     sof_race_name = graphics_info_item.get('sofRaceName', '')
+                    sof_faction_name = graphics_info_item.get('sofFactionName', '')
                     texture_files = []
                     if sof_hull_name:
                         texture_files = self._get_texture_files_from_dependencies(sof_hull_name, icon_folder, sof_race_name)
+                    
+                    # 获取飞船根目录
+                    ship_root_directory = None
+                    if icon_folder and sof_hull_name:
+                        ship_root_directory = self._find_ship_root_directory(icon_folder, sof_hull_name)
                     
                     # 如果没有找到模型，收集到列表中
                     if not model_files:
@@ -1781,6 +1890,10 @@ class ShipTree(QTreeWidget):
                                 icon=self.set_icon_from_extension(os.path.splitext(texture_file)[1]),
                             )
                             ship_dir.add(texture_item)
+                        
+                        # 添加 faction 目录（如果存在）
+                        if ship_root_directory and sof_faction_name:
+                            self._add_faction_directory_to_ship(ship_dir, ship_root_directory, sof_faction_name, sof_hull_name, icon_folder, sof_race_name)
             
             # 如果有未发布的飞船，创建专门的组放在最后
             if unpublished_ships:
@@ -1808,9 +1921,15 @@ class ShipTree(QTreeWidget):
                     # 获取贴图文件
                     icon_folder = graphics_info_item.get('iconFolder', '')
                     sof_race_name = graphics_info_item.get('sofRaceName', '')
+                    sof_faction_name = graphics_info_item.get('sofFactionName', '')
                     texture_files = []
                     if sof_hull_name:
                         texture_files = self._get_texture_files_from_dependencies(sof_hull_name, icon_folder, sof_race_name)
+                    
+                    # 获取飞船根目录
+                    ship_root_directory = None
+                    if icon_folder and sof_hull_name:
+                        ship_root_directory = self._find_ship_root_directory(icon_folder, sof_hull_name)
                     
                     # 未发布的飞船，无论是否有模型，都添加到 Unpublished 组（作为目录）
                     ship_dir = EVEDirectory(
@@ -1853,6 +1972,10 @@ class ShipTree(QTreeWidget):
                         )
                         ship_dir.add(texture_item)
                     
+                    # 添加 faction 目录（如果存在）
+                    if ship_root_directory and sof_faction_name:
+                        self._add_faction_directory_to_ship(ship_dir, ship_root_directory, sof_faction_name, sof_hull_name, icon_folder, sof_race_name)
+                    
                     # 如果没有找到模型，同时收集到 Model Not Found 列表中
                     if not model_files:
                         ships_without_model.append((type_id, type_name, group_id, group_name, graphic_id, graphics_info_item))
@@ -1881,9 +2004,15 @@ class ShipTree(QTreeWidget):
                     sof_hull_name = graphics_info_item.get('sofHullName', '')
                     icon_folder = graphics_info_item.get('iconFolder', '')
                     sof_race_name = graphics_info_item.get('sofRaceName', '')
+                    sof_faction_name = graphics_info_item.get('sofFactionName', '')
                     texture_files = []
                     if sof_hull_name:
                         texture_files = self._get_texture_files_from_dependencies(sof_hull_name, icon_folder, sof_race_name)
+                    
+                    # 获取飞船根目录
+                    ship_root_directory = None
+                    if icon_folder and sof_hull_name:
+                        ship_root_directory = self._find_ship_root_directory(icon_folder, sof_hull_name)
                     
                     # Model Not Found 的飞船也创建为目录
                     ship_dir = EVEDirectory(
@@ -1912,6 +2041,10 @@ class ShipTree(QTreeWidget):
                             icon=self.set_icon_from_extension(os.path.splitext(texture_file)[1]),
                         )
                         ship_dir.add(texture_item)
+                    
+                    # 添加 faction 目录（如果存在）
+                    if ship_root_directory and sof_faction_name:
+                        self._add_faction_directory_to_ship(ship_dir, ship_root_directory, sof_faction_name, sof_hull_name, icon_folder, sof_race_name)
             
             # 如果有多模型飞船，创建 "Multi-Model" 组放在最后
             if multi_model_ships:
@@ -1934,9 +2067,15 @@ class ShipTree(QTreeWidget):
                     sof_hull_name = graphics_info_item.get('sofHullName', '')
                     icon_folder = graphics_info_item.get('iconFolder', '')
                     sof_race_name = graphics_info_item.get('sofRaceName', '')
+                    sof_faction_name = graphics_info_item.get('sofFactionName', '')
                     texture_files = []
                     if sof_hull_name:
                         texture_files = self._get_texture_files_from_dependencies(sof_hull_name, icon_folder, sof_race_name)
+                    
+                    # 获取飞船根目录
+                    ship_root_directory = None
+                    if icon_folder and sof_hull_name:
+                        ship_root_directory = self._find_ship_root_directory(icon_folder, sof_hull_name)
                     
                     # Multi-Model 的飞船也创建为目录
                     ship_dir = EVEDirectory(
@@ -1978,6 +2117,10 @@ class ShipTree(QTreeWidget):
                             icon=self.set_icon_from_extension(os.path.splitext(texture_file)[1]),
                         )
                         ship_dir.add(texture_item)
+                    
+                    # 添加 faction 目录（如果存在）
+                    if ship_root_directory and sof_faction_name:
+                        self._add_faction_directory_to_ship(ship_dir, ship_root_directory, sof_faction_name, sof_hull_name, icon_folder, sof_race_name)
             
             # 更新日志信息
             log_parts = []
