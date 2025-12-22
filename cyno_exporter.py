@@ -366,6 +366,40 @@ class ResTree(QTreeWidget):
         self.event_logger.add(f"Exported {len(files)} resfiles to {dest_folder}")
         loading.close()
 
+    def _find_resfileindex_path(self, shared_cache_location):
+        """
+        智能查找 resfileindex.txt 文件路径，支持 Windows/Linux 和 macOS 的不同路径结构
+        
+        参数:
+        - shared_cache_location: SharedCache 的根目录路径
+        
+        返回:
+        - str: resfileindex.txt 的完整路径，如果未找到返回 None
+        """
+        if not shared_cache_location:
+            return None
+        
+        # 尝试的路径列表（按优先级排序）
+        possible_paths = [
+            # Windows/Linux 路径
+            os.path.join(shared_cache_location, "tq", "resfileindex.txt"),
+            # macOS 路径
+            os.path.join(shared_cache_location, "tq", "EVE.app", "Contents", "Resources", "build", "resfileindex.txt"),
+        ]
+        
+        # 尝试每个路径
+        for path in possible_paths:
+            if os.path.exists(path) and os.path.isfile(path):
+                self.event_logger.add(f"Found resfileindex.txt at: {path}")
+                return path
+        
+        # 如果都没找到，记录所有尝试的路径
+        self.event_logger.add(f"resfileindex.txt not found. Tried paths:")
+        for path in possible_paths:
+            self.event_logger.add(f"  - {path}")
+        
+        return None
+
     def _start_loading(self, root, resfileindex_path):
         with open(resfileindex_path, "r", encoding="utf-8") as f:
             resfileindex = ResFileIndex.resindexfile_object(f.read())
@@ -404,9 +438,18 @@ class ResTree(QTreeWidget):
 
             self.config = json.loads(open(CONFIG_FILE, "r").read())
             try:
-                resfileindex_path = os.path.join(
-                    self.config["SharedCacheLocation"], "tq", "resfileindex.txt"
-                )
+                shared_cache_location = self.config.get("SharedCacheLocation", "")
+                if not shared_cache_location:
+                    raise ValueError("SharedCacheLocation is not configured in config.json")
+                
+                # 使用智能查找方法定位 resfileindex.txt
+                resfileindex_path = self._find_resfileindex_path(shared_cache_location)
+                if not resfileindex_path:
+                    raise FileNotFoundError(
+                        f"resfileindex.txt not found in SharedCache location: {shared_cache_location}\n"
+                        f"Please check if the path is correct and the file exists."
+                    )
+                
                 self._start_loading(root, resfileindex_path)
             except OSError as e:
                 error_msg = f"Invalid Shared Cache location. Check config.json\n错误详情: {str(e)}"

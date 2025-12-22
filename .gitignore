@@ -7,3 +7,4 @@ build
 esi.py
 /.idea
 /sde_cache
+/output

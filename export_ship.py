@@ -282,13 +282,22 @@ def convert_dds_to_png(dds_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Export ship resources")
-    parser.add_argument("type_id", type=int, help="Ship TypeID")
+    parser.add_argument("type_id", type=int, help="Ship TypeID (negative to skip conversion)")
     args = parser.parse_args()
     
-    print(f"Fetching ship information (TypeID: {args.type_id})...")
-    ship_info = get_ship_info_from_sde(args.type_id)
+    # Check if type_id is negative (skip conversion)
+    skip_conversion = args.type_id < 0
+    actual_type_id = abs(args.type_id) if skip_conversion else args.type_id
+    
+    if skip_conversion:
+        print(f"Mode: Copy only (no conversion) for TypeID: {actual_type_id}")
+    else:
+        print(f"Mode: Copy and convert for TypeID: {actual_type_id}")
+    
+    print(f"Fetching ship information (TypeID: {actual_type_id})...")
+    ship_info = get_ship_info_from_sde(actual_type_id)
     if not ship_info:
-        print(f"Error: Cannot find ship information for TypeID {args.type_id}")
+        print(f"Error: Cannot find ship information for TypeID {actual_type_id}")
         sys.exit(1)
     
     sof_hull_name = ship_info.get("sofHullName", "")
@@ -359,13 +368,49 @@ def main():
     
     print(f"Found gr2 files in {len(gr2_dirs)} directories")
     
+    # Find all files in gr2 directories from resfileindex (including subdirectories)
+    additional_files = set()
+    filtered_out_count = 0
+    for res_path in resfiles.keys():
+        # res_path in resfiles is already lowercase and without "res:/" prefix
+        # Check if this file is in any gr2 directory
+        for gr2_dir in gr2_dirs:
+            gr2_dir_lower = gr2_dir.lower()
+            # Check if file is in gr2 directory or its subdirectories
+            if res_path.startswith(gr2_dir_lower + "/") or res_path == gr2_dir_lower:
+                # Check if it passes filter
+                full_res_path = f"res:/{res_path}"
+                if is_filtered_file(full_res_path, icon_folder, sof_race_name):
+                    additional_files.add(f"res:/{res_path}")
+                else:
+                    filtered_out_count += 1
+                break
+    
+    if filtered_out_count > 0:
+        print(f"Filtered out {filtered_out_count} low quality files from gr2 directories")
+    
+    # Combine filtered dependencies with additional files from gr2 directories
+    # Normalize filtered_dependencies to ensure consistent format
+    normalized_deps = set()
+    for dep_path in filtered_dependencies:
+        if dep_path.startswith("res:/"):
+            normalized_deps.add(dep_path)
+        else:
+            normalized_deps.add(f"res:/{dep_path}")
+    
+    all_files_to_process = normalized_deps | additional_files
+    
+    print(f"Found {len(additional_files)} additional files in gr2 directories")
+    print(f"Total files to process: {len(all_files_to_process)}")
+    
     # Create output directory
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
     
     # Download and convert files
+    all_files_list = sorted(list(all_files_to_process))
     print("Downloading and converting files...")
-    for i, dep_path in enumerate(filtered_dependencies, 1):
+    for i, dep_path in enumerate(all_files_list, 1):
         print(f"[{i}/{len(filtered_dependencies)}] Processing: {dep_path}")
         
         # Normalize path
@@ -408,14 +453,17 @@ def main():
             output_path = os.path.join(output_dir, filename)
         
         if download_file(dep_path, resfiles, output_path):
-            if output_path.lower().endswith(".gr2"):
-                print(f"  Converting GR2 -> OBJ...")
-                if convert_gr2_to_obj(output_path):
-                    print(f"  [+] Converted to OBJ")
-            elif output_path.lower().endswith(".dds"):
-                print(f"  Converting DDS -> PNG...")
-                if convert_dds_to_png(output_path):
-                    print(f"  [+] Converted to PNG")
+            if not skip_conversion:
+                if output_path.lower().endswith(".gr2"):
+                    print(f"  Converting GR2 -> OBJ...")
+                    if convert_gr2_to_obj(output_path):
+                        print(f"  [+] Converted to OBJ")
+                elif output_path.lower().endswith(".dds"):
+                    print(f"  Converting DDS -> PNG...")
+                    if convert_dds_to_png(output_path):
+                        print(f"  [+] Converted to PNG")
+            else:
+                print(f"  [+] Copied (no conversion)")
         else:
             print(f"  [!] Download failed")
     
