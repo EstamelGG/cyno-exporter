@@ -2540,8 +2540,27 @@ class ShipTree(QTreeWidget):
         
         # 获取所有依赖
         all_dependencies = self._get_ship_dependencies(sof_hull_name)
-        if not all_dependencies:
-            self.event_logger.add(f"No dependencies found for ship: {sof_hull_name}")
+        
+        # 获取图形信息用于过滤判断和查找 faction 目录
+        icon_folder = graphics_info.get('iconFolder', '')
+        sof_race_name = graphics_info.get('sofRaceName', '')
+        sof_faction_name = graphics_info.get('sofFactionName', '')
+        
+        # 获取飞船根目录
+        ship_root_directory = None
+        if icon_folder and sof_hull_name:
+            ship_root_directory = self._find_ship_root_directory(icon_folder, sof_hull_name)
+        
+        # 获取 faction 目录中的文件（如果存在）
+        faction_files = []
+        if ship_root_directory and sof_faction_name:
+            faction_files = self._find_faction_directory_files(ship_root_directory, sof_faction_name, sof_hull_name, icon_folder, sof_race_name)
+        
+        # 合并依赖文件和 faction 文件，去重
+        all_files = list(set(all_dependencies + faction_files))
+        
+        if not all_files:
+            self.event_logger.add(f"No dependencies or faction files found for ship: {sof_hull_name}")
             return
         
         # 选择目标文件夹
@@ -2549,15 +2568,11 @@ class ShipTree(QTreeWidget):
         if not dest_folder:
             return
         
-        # 获取图形信息用于过滤判断
-        icon_folder = graphics_info.get('iconFolder', '')
-        sof_race_name = graphics_info.get('sofRaceName', '')
-        
         # 分离过滤后的文件和未过滤的文件
         filtered_files = []  # 放在根目录的文件
         unfiltered_files = []  # 放在 others 目录的文件
         
-        for dep_path in all_dependencies:
+        for dep_path in all_files:
             # 确保路径是完整的 res:/ 格式用于判断
             full_dep_path = dep_path if dep_path.startswith("res:/") else f"res:/{dep_path}"
             is_filtered = self._is_filtered_file(full_dep_path, icon_folder, sof_race_name)
@@ -2567,7 +2582,10 @@ class ShipTree(QTreeWidget):
             else:
                 unfiltered_files.append(dep_path)
         
-        self.event_logger.add(f"Exporting {len(all_dependencies)} dependencies for ship: {item.text(0)} (sofHullName: {sof_hull_name})")
+        self.event_logger.add(f"Exporting {len(all_files)} files for ship: {item.text(0)} (sofHullName: {sof_hull_name})")
+        self.event_logger.add(f"  - {len(all_dependencies)} from dependencies")
+        if faction_files:
+            self.event_logger.add(f"  - {len(faction_files)} from faction directory")
         self.event_logger.add(f"  - {len(filtered_files)} filtered files (root directory)")
         self.event_logger.add(f"  - {len(unfiltered_files)} unfiltered files (others directory)")
         
