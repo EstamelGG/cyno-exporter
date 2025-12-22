@@ -1433,7 +1433,7 @@ class ShipTree(QTreeWidget):
         
         参数:
         - ship_root_directory: 飞船根目录，如 res:/dx9/model/ship/amarr/frigate/af1/
-        - sof_faction_name: 派系名称，如 amarr
+        - sof_faction_name: 派系名称，如 amarr。如果以 "navy" 结尾（如 caldarinavy），则查找 "navy" 目录
         - sof_hull_name: 船体名称，如 af1_t1，用于按文件名过滤
         - icon_folder: 图标文件夹路径，用于过滤判断
         - sof_race_name: 种族名称，用于过滤判断
@@ -1457,8 +1457,15 @@ class ShipTree(QTreeWidget):
         if not base_path.endswith("/"):
             base_path += "/"
         
+        # 如果 sof_faction_name 以 "navy" 结尾，则查找 "navy" 目录
+        sof_faction_name_lower = sof_faction_name.lower()
+        if sof_faction_name_lower.endswith("navy"):
+            directory_name = "navy"
+        else:
+            directory_name = sof_faction_name_lower
+        
         # 构建 faction 目录路径
-        faction_dir_path = f"{base_path}{sof_faction_name.lower()}/"
+        faction_dir_path = f"{base_path}{directory_name}/"
         faction_dir_path_lower = faction_dir_path.lower()
         
         # 准备 sofHullName 过滤（如果提供）
