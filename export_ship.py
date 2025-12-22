@@ -343,6 +343,22 @@ def main():
     
     print(f"After filtering: {len(filtered_dependencies)} files remaining")
     
+    # Find all gr2 files and their directories
+    gr2_dirs = []
+    for dep_path in filtered_dependencies:
+        dep_lower = dep_path.lower()
+        if dep_lower.endswith(".gr2"):
+            # Get directory of gr2 file
+            if dep_path.startswith("res:/"):
+                dir_path = dep_path[5:]
+            else:
+                dir_path = dep_path
+            gr2_dir = os.path.dirname(dir_path)
+            if gr2_dir and gr2_dir not in gr2_dirs:
+                gr2_dirs.append(gr2_dir)
+    
+    print(f"Found gr2 files in {len(gr2_dirs)} directories")
+    
     # Create output directory
     output_dir = "output"
     os.makedirs(output_dir, exist_ok=True)
@@ -352,8 +368,44 @@ def main():
     for i, dep_path in enumerate(filtered_dependencies, 1):
         print(f"[{i}/{len(filtered_dependencies)}] Processing: {dep_path}")
         
-        filename = os.path.basename(dep_path)
-        output_path = os.path.join(output_dir, filename)
+        # Normalize path
+        if dep_path.startswith("res:/"):
+            normalized_path = dep_path[5:]
+        else:
+            normalized_path = dep_path
+        
+        normalized_path_lower = normalized_path.lower()
+        
+        # Check if it's a shared resource
+        is_shared = "/shared/" in normalized_path_lower
+        
+        # Determine output path
+        output_path = None
+        if is_shared:
+            # Save to shared directory
+            filename = os.path.basename(dep_path)
+            output_path = os.path.join(output_dir, "shared", filename)
+        else:
+            # Find which gr2 directory this file belongs to
+            for gr2_dir in gr2_dirs:
+                gr2_dir_lower = gr2_dir.lower()
+                # Check if file is in this gr2 directory or its subdirectories
+                if normalized_path_lower.startswith(gr2_dir_lower + "/") or normalized_path_lower == gr2_dir_lower:
+                    # Get relative path from gr2 directory
+                    if normalized_path_lower == gr2_dir_lower:
+                        # This is the gr2 directory itself, shouldn't happen for files
+                        filename = os.path.basename(dep_path)
+                        output_path = os.path.join(output_dir, filename)
+                    else:
+                        # Get path relative to gr2 directory
+                        relative_path = normalized_path[len(gr2_dir):].lstrip("/")
+                        output_path = os.path.join(output_dir, relative_path)
+                    break
+        
+        if not output_path:
+            # Fallback: save to root output directory
+            filename = os.path.basename(dep_path)
+            output_path = os.path.join(output_dir, filename)
         
         if download_file(dep_path, resfiles, output_path):
             if output_path.lower().endswith(".gr2"):
