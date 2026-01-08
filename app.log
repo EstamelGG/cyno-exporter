@@ -1,0 +1,13 @@
+[2026-01-08 20:10:00] ================================================================================
+[2026-01-08 20:10:00] 应用程序启动 - 2026-01-08 20:10:00
+[2026-01-08 20:10:00] ================================================================================
+[2026-01-08 20:10:01] Starting SDE download in background while loading Local files...
+[2026-01-08 20:10:01] Found resfileindex.txt at: E:/EVE/SharedCache\tq\resfileindex.txt
+[2026-01-08 20:10:01] Fetching latest SDE build number from: https://developers.eveonline.com/static-data/tranquility/latest.jsonl
+[2026-01-08 20:10:02] Loading resfiles...
+[2026-01-08 20:10:03] Response: 200
+[2026-01-08 20:10:03] Latest SDE build number: 3159816 (Release: 2026-01-08T11:14:17Z)
+[2026-01-08 20:10:03] Downloading SDE from: https://developers.eveonline.com/static-data/tranquility/eve-online-static-data-3159816-jsonl.zip
+[2026-01-08 20:10:03] Save to: ./sde_cache\eve-online-static-data-3159816-jsonl.zip
+[2026-01-08 20:10:03] Response: 200
+[2026-01-08 20:10:03] File size: 78.68 MB

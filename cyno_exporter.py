@@ -617,32 +617,150 @@ class ResFileDependenciesDownloadThread(QThread):
     
     def run(self):
         """在后台线程中执行下载"""
+        import traceback
+        # 首先直接写入文件，确保即使 event_logger 有问题也能记录
         try:
-            self.event_logger.add("Fetching resfiledependencies.yaml...")
-            file_urls = get_file_urls(self.build_number, ["resfiledependencies.yaml"], event_logger=self.event_logger)
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [线程run方法] ResFileDependenciesDownloadThread.run() 开始执行\n")
+                f.flush()
+        except:
+            pass
+        
+        try:
+            # 测试 event_logger 是否可用
+            if self.event_logger:
+                self.event_logger.add(f"[线程启动] ResFileDependenciesDownloadThread 开始运行 (build_number: {self.build_number})")
+            else:
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [警告] event_logger 为 None\n")
+                    f.flush()
             
-            if "resfiledependencies.yaml" not in file_urls:
+            # 先测试基础 URL 是否可达
+            test_url = f"https://binaries.eveonline.com/eveonline_{self.build_number}.txt"
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [测试URL] 准备测试 URL 可达性: {test_url}\n")
+                f.flush()
+            
+            try:
+                test_response = requests.get(test_url, timeout=10)
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [测试URL] 响应状态: {test_response.status_code}\n")
+                    f.flush()
+                if test_response.status_code != 200:
+                    error_msg = f"URL 不可达: {test_url} (状态码: {test_response.status_code})"
+                    if self.event_logger:
+                        self.event_logger.add(error_msg)
+                    with open("app.log", "a", encoding="utf-8") as f:
+                        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [错误] {error_msg}\n")
+                        f.flush()
+                    self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                    return
+            except requests.RequestException as e:
+                error_msg = f"URL 测试失败: {test_url} - {str(e)}"
+                if self.event_logger:
+                    self.event_logger.add(error_msg)
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [错误] {error_msg}\n")
+                    f.flush()
+                self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                return
+            
+            if self.event_logger:
+                self.event_logger.add("Fetching resfiledependencies.yaml...")
+            
+            try:
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [步骤1] 开始调用 get_file_urls\n")
+                    f.flush()
+                file_urls = get_file_urls(self.build_number, ["resfiledependencies.yaml"], event_logger=self.event_logger)
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [步骤1完成] get_file_urls 返回: {len(file_urls) if file_urls else 0} 个URL\n")
+                    f.flush()
+            except Exception as e:
+                error_msg = f"获取文件URL失败: {str(e)}"
+                if self.event_logger:
+                    self.event_logger.add(error_msg)
+                    self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [错误] {error_msg}\n")
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [堆栈] {traceback.format_exc()}\n")
+                    f.flush()
+                self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                return
+            
+            if not file_urls or "resfiledependencies.yaml" not in file_urls:
                 self.event_logger.add("Failed to find resfiledependencies.yaml URL")
                 self.download_complete.emit(False, self.build_number, self.cache_file, {})
                 return
             
             url = file_urls["resfiledependencies.yaml"]
             self.event_logger.add(f"Downloading resfiledependencies.yaml: {url}")
-            response = requests.get(url, timeout=30)
-            self.event_logger.add(f"Response: {response.status_code}")
-            response.raise_for_status()
+            
+            try:
+                response = requests.get(url, timeout=30)
+                self.event_logger.add(f"Response: {response.status_code}, Content-Length: {len(response.content)} bytes")
+                response.raise_for_status()
+            except Exception as e:
+                self.event_logger.add(f"下载文件失败: {str(e)}")
+                self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+                self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                return
             
             # 解析 YAML
-            dependencies = yaml.safe_load(response.text) or {}
+            try:
+                text_size = len(response.text)
+                self.event_logger.add(f"开始解析 YAML，响应文本大小: {text_size} 字符 ({text_size / 1024 / 1024:.2f} MB)")
+                
+                # 检查文件大小，如果太大可能有问题
+                if text_size > 100 * 1024 * 1024:  # 100MB
+                    self.event_logger.add(f"警告: YAML 文件非常大 ({text_size / 1024 / 1024:.2f} MB)，可能导致内存问题")
+                
+                # 使用 safe_load 解析，避免代码执行
+                self.event_logger.add("正在解析 YAML 内容...")
+                dependencies = yaml.safe_load(response.text) or {}
+                
+                if isinstance(dependencies, dict):
+                    deps_count = len(dependencies)
+                else:
+                    deps_count = 0
+                
+                self.event_logger.add(f"YAML 解析完成，依赖项数量: {deps_count}")
+            except yaml.YAMLError as e:
+                self.event_logger.add(f"YAML 解析错误: {str(e)}")
+                self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+                self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                return
+            except MemoryError as e:
+                self.event_logger.add(f"内存不足，无法解析 YAML: {str(e)}")
+                self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+                self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                return
+            except Exception as e:
+                self.event_logger.add(f"解析 YAML 时发生未知错误: {str(e)}")
+                self.event_logger.add(f"错误类型: {type(e).__name__}")
+                self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+                self.download_complete.emit(False, self.build_number, self.cache_file, {})
+                return
             
             # 保存到缓存
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                yaml.dump(dependencies, f, allow_unicode=True)
+            try:
+                self.event_logger.add(f"保存缓存文件到: {self.cache_file}")
+                with open(self.cache_file, 'w', encoding='utf-8') as f:
+                    yaml.dump(dependencies, f, allow_unicode=True)
+                self.event_logger.add(f"缓存文件保存成功")
+            except Exception as e:
+                self.event_logger.add(f"保存缓存文件失败: {str(e)}")
+                self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+                # 即使保存失败，也返回下载的数据
+                pass
             
             self.event_logger.add(f"Downloaded and cached {len(dependencies)} dependencies")
             self.download_complete.emit(True, self.build_number, self.cache_file, dependencies)
+            self.event_logger.add("[线程完成] ResFileDependenciesDownloadThread 成功完成")
         except Exception as e:
-            self.event_logger.add(f"Error downloading resfiledependencies.yaml: {str(e)}")
+            error_msg = f"Error downloading resfiledependencies.yaml: {str(e)}"
+            self.event_logger.add(error_msg)
+            self.event_logger.add(f"完整堆栈跟踪: {traceback.format_exc()}")
             self.download_complete.emit(False, self.build_number, self.cache_file, {})
 
 
@@ -666,10 +784,12 @@ def get_file_urls(build_number, file_names, event_logger=None):
     - event_logger: 事件日志记录器（可选）
     
     返回:
-    - dict: {file_name: full_url}
+    - dict: {file_name: full_url} 或 None（如果出错）
     """
     url = f"https://binaries.eveonline.com/eveonline_{build_number}.txt"
     try:
+        if event_logger:
+            event_logger.add(f"准备请求文件列表: {url}")
         response = requests.get(url, timeout=10)
         log_msg = f"Requesting file list: {url} | Response: {response.status_code}"
         if event_logger:
@@ -678,6 +798,8 @@ def get_file_urls(build_number, file_names, event_logger=None):
             print(log_msg)
         response.raise_for_status()
         content = response.text
+        if event_logger:
+            event_logger.add(f"文件列表响应大小: {len(content)} 字符")
         file_urls = {}
         
         for line in content.splitlines():
@@ -688,12 +810,18 @@ def get_file_urls(build_number, file_names, event_logger=None):
                         url_part = parts[1]
                         full_url = f"https://binaries.eveonline.com/{url_part}"
                         file_urls[file_name] = full_url
-                        print(f"Found {file_name} URL: {full_url}")
+                        if event_logger:
+                            event_logger.add(f"Found {file_name} URL: {full_url}")
+                        else:
+                            print(f"Found {file_name} URL: {full_url}")
                         break
         
         missing_files = [f for f in file_names if f not in file_urls]
         if missing_files:
-            raise ValueError(f"Failed to find download links for the following files: {', '.join(missing_files)}")
+            error_msg = f"Failed to find download links for the following files: {', '.join(missing_files)}"
+            if event_logger:
+                event_logger.add(error_msg)
+            raise ValueError(error_msg)
         
         return file_urls
     except requests.exceptions.HTTPError as e:
@@ -702,14 +830,23 @@ def get_file_urls(build_number, file_names, event_logger=None):
             event_logger.add(error_msg)
         else:
             print(error_msg, file=sys.stderr)
-        sys.exit(1)
+        # 不在后台线程中调用 sys.exit，而是返回 None 或抛出异常
+        raise
     except requests.RequestException as e:
         error_msg = f"Request error getting file list: {str(e)} | URL: {url}"
         if event_logger:
             event_logger.add(error_msg)
         else:
             print(error_msg, file=sys.stderr)
-        sys.exit(1)
+        # 不在后台线程中调用 sys.exit，而是返回 None 或抛出异常
+        raise
+    except Exception as e:
+        error_msg = f"Unexpected error getting file list: {str(e)} | URL: {url}"
+        if event_logger:
+            event_logger.add(error_msg)
+        else:
+            print(error_msg, file=sys.stderr)
+        raise
 
 
 class SDEDownloader:
@@ -1091,6 +1228,7 @@ class ShipTree(QTreeWidget):
         self.loading_label = None
         self.res_tree = None  # 保存 ResTree 引用，用于查找模型文件
         self.resfile_dependencies = {}  # 存储 resfiledependencies.yaml 的内容
+        self.ship_root_item = None  # 保存飞船树的根节点，用于重新加载
         
         self.icon_atlas = QPixmap("./icons/icons.png")
         
@@ -1316,9 +1454,64 @@ class ShipTree(QTreeWidget):
         
         # 缓存不存在，在后台线程中下载
         self.event_logger.add("Starting background download of resfiledependencies.yaml...")
-        download_thread = ResFileDependenciesDownloadThread(build_number, cache_file, self.event_logger)
-        download_thread.download_complete.connect(self._on_resfile_dependencies_downloaded)
-        download_thread.start()
+        self.event_logger.add(f"创建下载线程: build_number={build_number}, cache_file={cache_file}")
+        try:
+            # 直接写入文件日志，确保记录
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程] 开始创建 ResFileDependenciesDownloadThread\n")
+                f.flush()
+            
+            download_thread = ResFileDependenciesDownloadThread(build_number, cache_file, self.event_logger)
+            
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程] 线程对象创建成功\n")
+                f.flush()
+            
+            download_thread.download_complete.connect(self._on_resfile_dependencies_downloaded)
+            
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程] 信号连接成功\n")
+                f.flush()
+            
+            self.event_logger.add("准备启动下载线程...")
+            
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程] 准备调用 download_thread.start()\n")
+                f.flush()
+            
+            download_thread.start()
+            
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程] download_thread.start() 调用完成\n")
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程] 线程状态 - isRunning: {download_thread.isRunning()}, isFinished: {download_thread.isFinished()}\n")
+                f.flush()
+            
+            self.event_logger.add(f"下载线程已启动 (isRunning: {download_thread.isRunning()})")
+            
+            # 使用 QTimer 延迟检查线程状态（给线程一些时间启动）
+            from PyQt6.QtCore import QTimer
+            def check_thread_status():
+                with open("app.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [主线程-延迟检查] 线程状态 - isRunning: {download_thread.isRunning()}, isFinished: {download_thread.isFinished()}\n")
+                    f.flush()
+                if not download_thread.isRunning() and not download_thread.isFinished():
+                    error_msg = "警告: 线程启动后立即停止，可能发生了错误"
+                    self.event_logger.add(error_msg)
+                    with open("app.log", "a", encoding="utf-8") as f:
+                        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [警告] {error_msg}\n")
+                        f.flush()
+            
+            QTimer.singleShot(1000, check_thread_status)  # 1秒后检查
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"启动下载线程失败: {str(e)}"
+            self.event_logger.add(error_msg)
+            self.event_logger.add(f"堆栈跟踪: {traceback.format_exc()}")
+            with open("app.log", "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [错误] {error_msg}\n")
+                f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [堆栈] {traceback.format_exc()}\n")
+                f.flush()
         return False  # 返回 False 表示正在后台下载
     
     def _on_resfile_dependencies_downloaded(self, success, build_number, cache_file, dependencies):
@@ -1326,8 +1519,29 @@ class ShipTree(QTreeWidget):
         if success:
             self.resfile_dependencies = dependencies
             self.event_logger.add(f"Background download completed: Loaded {len(self.resfile_dependencies)} dependencies")
+            
+            # 依赖数据下载完成，现在加载飞船文件
+            if self.ship_root_item and not self.are_ships_loaded:
+                self._load_ship_files_after_dependencies_ready(self.ship_root_item)
         else:
             self.event_logger.add("Background download of resfiledependencies.yaml failed")
+            # 即使下载失败，也尝试加载飞船文件（可能无法获取依赖，但至少显示基本信息）
+            if self.ship_root_item and not self.are_ships_loaded:
+                self._load_ship_files_after_dependencies_ready(self.ship_root_item)
+    
+    def _load_ship_files_after_dependencies_ready(self, root):
+        """在依赖数据准备好后加载飞船文件"""
+        try:
+            self._load_ship_files(root)
+            self.are_ships_loaded = True
+        except Exception as e:
+            import traceback
+            error_msg = f"Error loading ship files: {str(e)}\n{traceback.format_exc()}"
+            self.event_logger.add(error_msg)
+            error_label = QLabel("Error loading ship files. Check Logs for details.", self)
+            error_label.setGeometry(25, 25, 500, 50)
+            error_label.setStyleSheet("color: red; font-weight: bold; background-color: rgba(0,0,0,128); padding: 5px;")
+            error_label.show()
     
     def _get_ship_dependencies(self, sof_hull_name):
         """
@@ -1626,24 +1840,20 @@ class ShipTree(QTreeWidget):
         except Exception as e:
             self.event_logger.add(f"Warning: Could not extract build number: {str(e)}")
         
+        # 保存根节点引用，用于后续加载
+        self.ship_root_item = root
+        
         # 加载 resfiledependencies.yaml（如果成功获取 build_number）
         if build_number:
-            self._load_resfile_dependencies(build_number)
+            dependencies_loaded = self._load_resfile_dependencies(build_number)
+            # 如果依赖数据已加载（从缓存），立即加载飞船文件
+            if dependencies_loaded:
+                self._load_ship_files_after_dependencies_ready(root)
+            # 否则等待后台下载完成后再加载（在 _on_resfile_dependencies_downloaded 中处理）
         else:
             self.event_logger.add("Warning: Cannot load resfiledependencies.yaml without build number")
-        
-        # 加载飞船数据
-        try:
-            self._load_ship_files(root)
-            self.are_ships_loaded = True
-        except Exception as e:
-            import traceback
-            error_msg = f"Error loading ship files: {str(e)}\n{traceback.format_exc()}"
-            self.event_logger.add(error_msg)
-            error_label = QLabel("Error loading ship files. Check Logs for details.", self)
-            error_label.setGeometry(25, 25, 500, 50)
-            error_label.setStyleSheet("color: red; font-weight: bold; background-color: rgba(0,0,0,128); padding: 5px;")
-            error_label.show()
+            # 即使没有 build_number，也尝试加载飞船文件（可能无法获取依赖，但至少显示基本信息）
+            self._load_ship_files_after_dependencies_ready(root)
     
     def _on_download_error(self, error_msg):
         """下载失败后的处理"""
@@ -2967,11 +3177,38 @@ class EventLogger(QObject):
     def __init__(self):
         super().__init__()
         self.log_items = []
+        self.log_file = "app.log"
+        self._cleanup_old_logs()
+        self._log_to_file("=" * 80)
+        self._log_to_file(f"应用程序启动 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self._log_to_file("=" * 80)
+
+    def _cleanup_old_logs(self):
+        """清理旧日志文件"""
+        try:
+            if os.path.exists(self.log_file):
+                os.remove(self.log_file)
+        except Exception as e:
+            # 如果清理失败，至少尝试输出到控制台
+            print(f"警告: 无法清理旧日志文件 {self.log_file}: {e}", file=sys.stderr)
+
+    def _log_to_file(self, message):
+        """将日志写入文件"""
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(self.log_file, "a", encoding="utf-8") as f:
+                f.write(f"[{timestamp}] {message}\n")
+                f.flush()  # 确保立即写入磁盘
+        except Exception as e:
+            # 如果文件写入失败，至少输出到控制台
+            print(f"警告: 无法写入日志文件: {e}", file=sys.stderr)
 
     def add(self, message):
-        self.log_items.append(
-            {"time": datetime.now().strftime("%H:%M:%S"), "message": message}
-        )
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_entry = {"time": timestamp, "message": message}
+        self.log_items.append(log_entry)
+        # 同时写入文件，包含完整的时间戳
+        self._log_to_file(message)
         self.on_update.emit()
 
 
@@ -3142,7 +3379,7 @@ class LoadingScreenWindow(QProgressDialog):
 
 
 def exception_hook(exc_type, exc_value, exc_traceback):
-    """全局异常处理函数，捕获所有未处理的异常并输出到终端"""
+    """全局异常处理函数，捕获所有未处理的异常并输出到终端和日志文件"""
     import traceback
     
     # 忽略 KeyboardInterrupt，让程序正常退出
@@ -3167,7 +3404,27 @@ def exception_hook(exc_type, exc_value, exc_traceback):
         # 同时输出到 stdout，以防 stderr 被重定向
         print(error_msg, flush=True)
     except:
-        # 如果输出失败，尝试写入文件
+        pass
+    
+    # 写入主日志文件
+    log_file = "app.log"
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n[{timestamp}] " + "=" * 80 + "\n")
+            f.write(f"[{timestamp}] 未捕获的异常发生！\n")
+            f.write(f"[{timestamp}] " + "=" * 80 + "\n")
+            f.write(f"[{timestamp}] 异常类型: {exc_type.__name__}\n")
+            f.write(f"[{timestamp}] 异常信息: {str(exc_value)}\n")
+            f.write(f"[{timestamp}] " + "=" * 80 + "\n")
+            f.write(f"[{timestamp}] 完整堆栈跟踪:\n")
+            f.write(f"[{timestamp}] " + "=" * 80 + "\n")
+            for line in traceback.format_exception(exc_type, exc_value, exc_traceback):
+                f.write(f"[{timestamp}] {line}")
+            f.write(f"[{timestamp}] " + "=" * 80 + "\n\n")
+            f.flush()
+    except:
+        # 如果主日志文件写入失败，尝试写入备用文件
         try:
             with open("error_log.txt", "a", encoding="utf-8") as f:
                 f.write(error_msg)
