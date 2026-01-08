@@ -1444,6 +1444,7 @@ class ShipTree(QTreeWidget):
         # 检查缓存是否存在
         if os.path.exists(cache_file):
             try:
+                self._update_loading_text("正在从缓存加载依赖数据...")
                 self.event_logger.add(f"Loading cached resfiledependencies.yaml from {cache_file}")
                 with open(cache_file, 'r', encoding='utf-8') as f:
                     self.resfile_dependencies = yaml.safe_load(f) or {}
@@ -1453,6 +1454,7 @@ class ShipTree(QTreeWidget):
                 self.event_logger.add(f"Error loading cached file: {str(e)}")
         
         # 缓存不存在，在后台线程中下载
+        self._update_loading_text("正在下载依赖数据...")
         self.event_logger.add("Starting background download of resfiledependencies.yaml...")
         self.event_logger.add(f"创建下载线程: build_number={build_number}, cache_file={cache_file}")
         try:
@@ -1522,11 +1524,13 @@ class ShipTree(QTreeWidget):
             
             # 依赖数据下载完成，现在加载飞船文件
             if self.ship_root_item and not self.are_ships_loaded:
+                self._update_loading_text("依赖数据已就绪，正在加载飞船数据...")
                 self._load_ship_files_after_dependencies_ready(self.ship_root_item)
         else:
             self.event_logger.add("Background download of resfiledependencies.yaml failed")
             # 即使下载失败，也尝试加载飞船文件（可能无法获取依赖，但至少显示基本信息）
             if self.ship_root_item and not self.are_ships_loaded:
+                self._update_loading_text("正在加载飞船数据...")
                 self._load_ship_files_after_dependencies_ready(self.ship_root_item)
     
     def _load_ship_files_after_dependencies_ready(self, root):
@@ -1534,10 +1538,15 @@ class ShipTree(QTreeWidget):
         try:
             self._load_ship_files(root)
             self.are_ships_loaded = True
+            # 加载完成后隐藏提示
+            if self.loading_label:
+                self.loading_label.hide()
         except Exception as e:
             import traceback
             error_msg = f"Error loading ship files: {str(e)}\n{traceback.format_exc()}"
             self.event_logger.add(error_msg)
+            if self.loading_label:
+                self.loading_label.hide()
             error_label = QLabel("Error loading ship files. Check Logs for details.", self)
             error_label.setGeometry(25, 25, 500, 50)
             error_label.setStyleSheet("color: red; font-weight: bold; background-color: rgba(0,0,0,128); padding: 5px;")
@@ -1810,6 +1819,13 @@ class ShipTree(QTreeWidget):
         # 启动 SDE 下载
         self._start_sde_download()
     
+    def _update_loading_text(self, text):
+        """更新加载提示文本"""
+        if self.loading_label:
+            self.loading_label.setText(text)
+            self.loading_label.show()
+            QApplication.processEvents()
+    
     def _on_download_progress(self, progress, message):
         """更新下载进度"""
         if self.loading_label:
@@ -1845,6 +1861,7 @@ class ShipTree(QTreeWidget):
         
         # 加载 resfiledependencies.yaml（如果成功获取 build_number）
         if build_number:
+            self._update_loading_text("正在加载依赖数据...")
             dependencies_loaded = self._load_resfile_dependencies(build_number)
             # 如果依赖数据已加载（从缓存），立即加载飞船文件
             if dependencies_loaded:
@@ -1870,6 +1887,7 @@ class ShipTree(QTreeWidget):
         """从 SDE 数据中加载飞船信息"""
         try:
             # 查找 groups.jsonl、types.jsonl 和 graphics.jsonl 文件
+            self._update_loading_text("正在查找 SDE 数据文件...")
             groups_path = None
             types_path = None
             graphics_path = None
@@ -1899,6 +1917,7 @@ class ShipTree(QTreeWidget):
                 return
             
             # 读取飞船组信息（categoryID = 6）
+            self._update_loading_text("正在读取飞船组信息...")
             ship_groups = {}  # {group_id: group_name}
             self.event_logger.add("Reading groups.jsonl...")
             
@@ -1931,6 +1950,7 @@ class ShipTree(QTreeWidget):
             self.event_logger.add(f"Found {len(ship_groups)} ship groups")
             
             # 读取 graphics.jsonl 建立 graphicID 到素材信息的映射
+            self._update_loading_text("正在读取图形信息...")
             graphics_info = {}  # {graphic_id: {iconFolder, sofFactionName, sofHullName, sofRaceName}}
             self.event_logger.add("Reading graphics.jsonl...")
             
@@ -1960,6 +1980,7 @@ class ShipTree(QTreeWidget):
             self.event_logger.add(f"Loaded {len(graphics_info)} graphics entries")
             
             # 读取飞船类型信息
+            self._update_loading_text("正在读取飞船类型信息...")
             ships_by_group = {}  # {group_id: [(type_id, type_name, published, graphic_id), ...]}
             self.event_logger.add("Reading types.jsonl...")
             
@@ -2021,8 +2042,15 @@ class ShipTree(QTreeWidget):
             # 收集多模型飞船（.gr2 文件数量超过 2 个）
             multi_model_ships = []  # [(type_id, type_name, group_id, group_name, graphic_id, graphics_info_item, model_files), ...]
             
+            # 构建目录结构
+            self._update_loading_text("正在构建飞船目录结构...")
+            
             # 添加已发布的组
-            for group_id, group_name in sorted_groups:
+            total_groups = len(sorted_groups)
+            for group_idx, (group_id, group_name) in enumerate(sorted_groups):
+                # 每处理10个组或最后一个组时更新提示
+                if group_idx % 10 == 0 or group_idx == total_groups - 1:
+                    self._update_loading_text(f"正在构建飞船目录结构... ({group_idx + 1}/{total_groups} 组)")
                 
                 # 创建组目录
                 group_item = EVEDirectory(
