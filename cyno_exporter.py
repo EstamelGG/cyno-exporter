@@ -301,8 +301,21 @@ class ResTree(QTreeWidget):
         self.event_logger.add(f"Obj exported: {out_file}")
 
     def _save_as_png(self, out_file_path):
+        """将 DDS 文件转换为 PNG"""
+        if not os.path.exists(out_file_path):
+            return  # 如果原文件不存在，直接返回
+        
         NvttExport().run(out_file_path)
-        os.remove(out_file_path)
+        
+        # 检查 PNG 文件是否成功生成
+        png_path = os.path.splitext(out_file_path)[0] + ".png"
+        if os.path.exists(png_path):
+            # 转换成功，删除原 DDS 文件
+            try:
+                if os.path.exists(out_file_path):
+                    os.remove(out_file_path)
+            except (FileNotFoundError, OSError):
+                pass  # 文件可能已被删除或无法删除，忽略错误
 
 
     def _save_file_command(self, item, multiple=False, multiple_destination=None, convert_dds=False):
@@ -2595,8 +2608,20 @@ class ShipTree(QTreeWidget):
 
     def _save_as_png(self, out_file_path):
         """将 DDS 文件转换为 PNG"""
+        if not os.path.exists(out_file_path):
+            return  # 如果原文件不存在，直接返回
+        
         NvttExport().run(out_file_path)
-        os.remove(out_file_path)
+        
+        # 检查 PNG 文件是否成功生成
+        png_path = os.path.splitext(out_file_path)[0] + ".png"
+        if os.path.exists(png_path):
+            # 转换成功，删除原 DDS 文件
+            try:
+                if os.path.exists(out_file_path):
+                    os.remove(out_file_path)
+            except (FileNotFoundError, OSError):
+                pass  # 文件可能已被删除或无法删除，忽略错误
     
     def _save_as_obj(self, out_file_path):
         """将 GR2 文件转换为 OBJ"""
