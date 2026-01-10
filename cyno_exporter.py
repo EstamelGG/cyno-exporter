@@ -2876,8 +2876,16 @@ class ShipTree(QTreeWidget):
         loading = LoadingScreenWindow(all_destinations, stay_on_top=True)
         
         # 第一阶段：下载/复制所有文件
+        # 对文件路径去重，避免重复处理同一文件（基于 dep_path）
+        seen_dep_paths = set()
         files_to_process = []  # 收集 (dep_path, dest_path, is_dds, is_gr2)
         for dep_path, dest_path in all_destinations:
+            # 标准化 dep_path 用于去重比较
+            normalized_dep_path = dep_path.lower().strip()
+            if normalized_dep_path in seen_dep_paths:
+                continue  # 跳过已处理的文件
+            seen_dep_paths.add(normalized_dep_path)
+            
             original_filename = os.path.basename(dest_path)
             is_dds = convert_dds and original_filename.lower().endswith(".dds")
             is_gr2 = convert_gr2 and original_filename.lower().endswith(".gr2")
